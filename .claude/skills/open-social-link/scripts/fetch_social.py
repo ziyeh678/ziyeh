@@ -106,6 +106,12 @@ def xiaohongshu(url):
         vurl = backups.pop(0) if backups else None
     except (KeyError, TypeError, IndexError):
         pass
+    # 原始上传文件：无水印、最高画质；放在最前面，带水印的流作为备用
+    origin = ((note.get("video") or {}).get("consumer") or {}).get("originVideoKey")
+    if origin:
+        if vurl:
+            backups.insert(0, vurl)
+        vurl = f"https://sns-video-bd.xhscdn.com/{origin}"
     nid = note.get("noteId") or (re.search(r"/([0-9a-f]{24})", final) or [None, None])[1]
     return {
         "platform": "xiaohongshu",

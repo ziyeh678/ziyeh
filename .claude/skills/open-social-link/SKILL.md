@@ -13,7 +13,8 @@ description: 打开并读取用户发来的小红书 / 抖音链接（含 xhslin
    ```
    云端会话的 TikHub 密钥由网络代理自动注入（`ziyeh` 环境里 api.tikhub.io 的网络密钥），不需要环境变量；本地电脑用 `export TIKHUB_API_KEY=...`。每次调用会扣 TikHub 余额，批量操作前先告诉用户。
 
-   - 抖音：走 TikHub（无水印）。小红书：脚本先走免费网页解析（完整视频流），失败才用 TikHub（输出里 `source` 标明）。
+   - 抖音：走 TikHub（无水印）。小红书：脚本先走免费网页解析，失败才用 TikHub（输出里 `source` 标明）。
+   - 小红书无水印：`video_url` 优先是原始上传文件（sns-video-bd.xhscdn.com/<originVideoKey>，无水印、原画质）；备用地址是带"小红书"水印的播放流，只在原始文件下载失败时才会用到——这种情况要告诉用户"这份带水印"。
    - TikHub 偶发 400（不扣费）脚本会自动重试 3 次。
 
    **下载后交给用户**：在手机上用时，用 SendUserFile 把下载好的 mp4/jpg 发给用户（下载目录用 scratchpad）。
