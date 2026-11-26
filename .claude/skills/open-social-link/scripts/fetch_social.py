@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """读取抖音 / 小红书分享链接的公开内容，输出 JSON。
 
-用法: python3 fetch_social.py "<链接或整段分享文字>"
+用法: python3 fetch_social.py "<链接或整段分享文字>" [--download 目录]
+加 --download 会把视频（或图片）下载到指定目录，并在 JSON 里给出本地路径。
 只依赖 Python 标准库。
 """
 import json
@@ -121,11 +122,33 @@ def xiaohongshu(url):
     }
 
 
+def download(out, folder):
+    import os
+    os.makedirs(folder, exist_ok=True)
+    files = []
+    base = f"{out.get('platform')}_{out.get('id')}"
+    targets = [(out["video_url"], ".mp4")] if out.get("video_url") else [(u, ".jpg") for u in out.get("images") or []]
+    for i, (u, ext) in enumerate(targets):
+        path = os.path.join(folder, f"{base}_{i}{ext}" if len(targets) > 1 else base + ext)
+        req = urllib.request.Request(u, headers={"User-Agent": UA, "Referer": out.get("url") or ""})
+        with urllib.request.urlopen(req, timeout=120) as r, open(path, "wb") as f:
+            while chunk := r.read(1 << 16):
+                f.write(chunk)
+        files.append(os.path.abspath(path))
+    return files
+
+
 def main():
-    if len(sys.argv) < 2:
+    args = sys.argv[1:]
+    folder = None
+    if "--download" in args:
+        i = args.index("--download")
+        folder = args[i + 1] if i + 1 < len(args) else "downloads"
+        del args[i:i + 2]
+    if not args:
         print(__doc__)
         sys.exit(1)
-    url = extract_url(" ".join(sys.argv[1:]))
+    url = extract_url(" ".join(args))
     host = urllib.parse.urlparse(url).netloc
     try:
         if "douyin" in host:
@@ -134,6 +157,11 @@ def main():
             out = xiaohongshu(url)
         else:
             out = {"error": f"不支持的链接: {url}"}
+        if folder and not out.get("error"):
+            try:
+                out["files"] = download(out, folder)
+            except Exception as e:  # noqa
+                out["download_error"] = f"{type(e).__name__}: {e}（云端通常没放行图片/视频 CDN，请在自己电脑上运行）"
     except Exception as e:  # noqa
         out = {"error": f"{type(e).__name__}: {e}", "url": url}
     print(json.dumps(out, ensure_ascii=False, indent=2))
