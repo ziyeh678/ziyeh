@@ -149,7 +149,23 @@ def shensha(gans, zhis):
         mark("羊刃", YANGREN[day_gan])
     for base, tag in [(year_zhi, "年"), (day_zhi, "日")]:
         th, ym, hg = _group(base)
+        jx = next(k for k in GROUP if base in k)[1]
         mark(f"桃花(以{tag}支)", th)
         mark(f"驿马(以{tag}支)", ym)
-        mark(f"华盖(以{tag}支)", hg)
+        mark(f"华盖(以{tag}支)", hg.replace(base, "") if hg == base else hg)
+        mark(f"将星(以{tag}支)", jx)
+    # 孤辰寡宿（以年支三会方）
+    for k, (gu, gua) in {"亥子丑": ("寅", "戌"), "寅卯辰": ("巳", "丑"), "巳午未": ("申", "辰"), "申酉戌": ("亥", "未")}.items():
+        if year_zhi in k:
+            mark("孤辰", gu)
+            mark("寡宿", gua)
+    # 吊客（年支后二位）
+    mark("吊客", ZHI[(ZHI.index(year_zhi) - 2) % 12])
+    # 月德 / 月德合（以月支三合局，查天干）
+    yd = next(v for k, v in {"寅午戌": "丙", "申子辰": "壬", "亥卯未": "甲", "巳酉丑": "庚"}.items() if zhis[1] in k)
+    ydh = {"丙": "辛", "壬": "丁", "甲": "己", "庚": "乙"}[yd]
+    for name, g in [("月德", yd), ("月德合", ydh)]:
+        hit = [f"{names[i]}干{x}" for i, x in enumerate(gans) if x == g]
+        if hit:
+            res[name] = hit
     return res
