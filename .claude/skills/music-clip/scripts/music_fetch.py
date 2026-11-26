@@ -2,11 +2,11 @@
 """按歌名在 QQ 音乐搜歌、自动挑原唱版本、下载完整 MP3（拒绝试听片段）。
 
   python3 music_fetch.py search "歌名 歌手"
-  python3 music_fetch.py get "歌名" [--artist 歌手] [--version live/翻唱/伴奏/...] --out <目录>
+  python3 music_fetch.py get "歌名" [--artist 歌手] [--version live/翻唱/伴奏/...] --out <目录>   # 先网易云，后 QQ
   python3 music_fetch.py login --qr <二维码保存路径>      # 用手机 QQ 扫码登录（会员歌需要）
   python3 music_fetch.py status                           # 看登录状态
 
-网易云对海外服务器不给下载地址，所以云端只用 QQ 音乐。
+网易云需先扫码登录（netease.py login），用户账号是黑胶会员；QQ 账号目前非会员，只能下免费歌。
 依赖：pip install --target <dir> -r ../requirements.txt，并把 ../vendor/qqmusic 加进 sys.path（脚本会自动加）。
 """
 import argparse
@@ -95,7 +95,25 @@ async def song_url(c, mid):
     return None, None
 
 
+def netease_first(title, artist, version, out):
+    """先走网易云（用户是黑胶会员），成功就直接输出。"""
+    args = [sys.executable, "-I", str(HERE / "netease.py"), "find", title, "--out", str(out)]
+    if artist:
+        args += ["--artist", artist]
+    if version:
+        args += ["--version", version]
+    r = subprocess.run(args, capture_output=True, text=True, encoding="utf-8")
+    try:
+        data = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        return {"error": (r.stdout or r.stderr)[-300:]}
+    if data.get("status") == "ok":
+        emit(data)
+    return data
+
+
 async def get(title, artist, version, out):
+    ne = netease_first(title, artist, version, out)
     cands = await search(f"{title} {artist or ''}".strip())
     if not cands:
         emit({"error": f"QQ 音乐搜不到：{title} {artist or ''}"}, 1)
@@ -106,6 +124,10 @@ async def get(title, artist, version, out):
         for cand in ranked[:5]:
             if score(cand, title, artist, version) < 40:
                 break
+            if norm(title) not in norm(cand["title"]):
+                continue  # 歌名必须对得上
+            if artist and not any(norm(artist) == norm(a) for a in cand["artists"]):
+                continue  # 指定了歌手就只要原唱
             purl, quality = await song_url(c, cand["mid"])
             if not purl:
                 tried.append({**cand, "reason": "无下载权限（会员/版权）"})
@@ -130,9 +152,9 @@ async def get(title, artist, version, out):
                 path.unlink()
                 tried.append({**cand, "reason": f"只拿到试听片段（{dur:.0f}s / 原曲 {cand['duration']}s）"})
                 continue
-            emit({"status": "ok", "path": str(path), "quality": quality, "duration": round(dur, 2), **cand,
-                  "logged_in": CRED.exists(), "skipped": tried})
-    emit({"error": "找到了但下载不了", "logged_in": CRED.exists(), "tried": tried,
+            emit({"status": "ok", "platform": "qq", "path": str(path), "quality": quality, "duration": round(dur, 2), **cand,
+                  "logged_in": CRED.exists(), "skipped": tried, "netease_outcome": ne.get("error")})
+    emit({"error": "网易云和 QQ 都没下到", "netease": ne, "qq_logged_in": CRED.exists(), "qq_tried": tried,
           "hint": "多半是会员/版权歌：先用 login 扫码登录（需 QQ 音乐会员），或让用户直接上传音频"}, 1)
 
 

@@ -5,6 +5,7 @@
   python3 netease.py status
   python3 netease.py search "歌名 歌手"
   python3 netease.py get <歌曲id> --out <目录>
+  python3 netease.py find "歌名" [--artist 歌手] [--version live] --out <目录>   # 搜索+自动挑原唱+下载
 登录 cookie 存在 ~/.config/ziyeh-music/netease-credential.json（只在本会话机器上）。
 """
 import argparse, hashlib, json, os, subprocess, sys, time
@@ -95,28 +96,111 @@ def search(q):
                           "duration": round(x["dt"] / 1000, 2), "fee": x.get("fee")} for x in (r.get("result") or {}).get("songs", [])]})
 
 
-def get(sid, out):
+ALT_WORDS = ["live", "现场", "翻唱", "cover", "伴奏", "纯音乐", "inst", "remix", "dj", "钢琴", "吉他", "铃声", "女声版", "男声版",
+             "加速", "降速", "0.8x", "1.2x", "片段", "演唱会", "八音盒", "改编", "(", "（"]
+
+
+def _norm(x):
+    import re
+    return re.sub(r"[\s\(\)（）\[\]【】《》'\"·・,，.。!！?？\-—_]", "", str(x or "").lower())
+
+
+def score(c, title, artist, version):
+    t, full = _norm(c["title"]), (c["title"] + " " + c["album"]).lower()
+    sc = 0
+    if t == _norm(title):
+        sc += 50
+    elif _norm(title) in t:
+        sc += 25
+    if artist:
+        if any(_norm(artist) == _norm(a) for a in c["artists"]):
+            sc += 40
+        elif any(_norm(artist) in _norm(a) or _norm(a) in _norm(artist) for a in c["artists"]):
+            sc += 20
+    alt = [w for w in ALT_WORDS if w in c["title"].lower()]
+    if version:
+        sc += 30 if version.lower() in full else -20
+    else:
+        sc -= 30 * len(alt)
+    if c["duration"] < 60:
+        sc -= 40
+    return sc
+
+
+def find(title, artist, version, out):
+    s = session()
+    q = f"{title} {artist or ''}".strip()
+    r = s.post("https://music.163.com/api/cloudsearch/pc", data={"s": q, "type": 1, "limit": 15, "offset": 0}, timeout=30).json()
+    cands = [{"id": x["id"], "title": x["name"], "artists": [a["name"] for a in x["ar"]], "album": x["al"]["name"],
+              "duration": round(x["dt"] / 1000, 2)} for x in (r.get("result") or {}).get("songs", [])]
+    ranked = sorted(cands, key=lambda c: -score(c, title, artist, version))
+    tried = []
+    for c in ranked[:4]:
+        if score(c, title, artist, version) < 40:
+            break
+        if _norm(title) not in _norm(c["title"]):
+            continue  # 歌名必须对得上
+        if artist and not any(_norm(artist) == _norm(a) for a in c["artists"]):
+            continue  # 指定了歌手就只要原唱，不拿翻唱凑数
+        try:
+            res = download(c["id"], out)
+            res.update(candidate=c, platform="netease", skipped=tried)
+            emit(res)
+        except DownloadError as e:
+            tried.append({**c, "reason": str(e)})
+    emit({"error": "网易云没下到", "tried": tried, "candidates": ranked[:5]}, 1)
+
+
+class DownloadError(Exception):
+    pass
+
+
+def download(sid, out):
     s = session()
     d = s.get("https://music.163.com/api/song/detail/", params={"ids": json.dumps([int(sid)])}, timeout=30).json()["songs"][0]
     dur = d.get("duration", 0) / 1000
     for level in ("exhigh", "standard"):
-        r = s.post("https://music.163.com/weapi/song/enhance/player/url/v1",
-                   data=ncm.encrypted_request({"ids": [int(sid)], "level": level, "encodeType": "mp3", "csrf_token": s.cookies.get("__csrf", "")}), timeout=30).json()
+        for wait in (0, 20, 45, 90):  # -460 = 请求太频繁被限流，等一会儿再试
+            time.sleep(wait)
+            r = s.post("https://music.163.com/weapi/song/enhance/player/url/v1",
+                       data=ncm.encrypted_request({"ids": [int(sid)], "level": level, "encodeType": "mp3", "csrf_token": s.cookies.get("__csrf", "")}), timeout=30).json()
+            if r.get("code") != -460:
+                break
+        else:
+            raise DownloadError("网易云限流（-460），过几分钟再试")
         it = (r.get("data") or [{}])[0]
         if it.get("url") and not it.get("freeTrialInfo"):
             break
     else:
-        emit({"error": "拿不到完整下载地址", "code": it.get("code"), "trial": bool(it.get("freeTrialInfo")), "logged_in": CRED.exists(),
-              "hint": "code 404 多为海外 IP 版权地区限制；trial 表示只给试听"}, 1)
+        raise DownloadError(f"拿不到完整下载地址（code {it.get('code')}{'，只给试听' if it.get('freeTrialInfo') else ''}；未登录或非会员时常见）")
     out.mkdir(parents=True, exist_ok=True)
     path = out / f"{d['name']} - {'、'.join(a['name'] for a in d['artists'])}.mp3".replace("/", "_")
-    resp = requests.get(it["url"].replace("http://", "https://", 1), headers={"Referer": "https://music.163.com"}, timeout=120)
-    resp.raise_for_status()
-    path.write_bytes(resp.content)
+    content, last = None, None
+    for _ in range(4):  # 海外连接网易云 CDN 偶尔被重置，重试
+        try:
+            resp = requests.get(it["url"].replace("http://", "https://", 1), headers={"Referer": "https://music.163.com"}, timeout=120)
+            resp.raise_for_status()
+            content = resp.content
+            break
+        except requests.RequestException as e:
+            last = e
+            time.sleep(2)
+    if content is None:
+        raise DownloadError(f"下载失败：{type(last).__name__}: {str(last)[:150]}")
+    path.write_bytes(content)
     real = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", str(path)], capture_output=True, text=True).stdout or 0)
     if abs(real - dur) > 3:
-        path.unlink(); emit({"error": f"只拿到片段 {real:.0f}s / 原曲 {dur:.0f}s"}, 1)
-    emit({"status": "ok", "path": str(path), "duration": round(real, 2), "title": d["name"], "album": d["album"]["name"]})
+        path.unlink()
+        raise DownloadError(f"只拿到片段 {real:.0f}s / 原曲 {dur:.0f}s")
+    return {"status": "ok", "path": str(path), "duration": round(real, 2), "title": d["name"],
+            "artists": [a["name"] for a in d["artists"]], "album": d["album"]["name"]}
+
+
+def get(sid, out):
+    try:
+        emit(download(sid, out))
+    except DownloadError as e:
+        emit({"error": str(e)}, 1)
 
 
 if __name__ == "__main__":
@@ -126,9 +210,11 @@ if __name__ == "__main__":
     sub.add_parser("status")
     q = sub.add_parser("search"); q.add_argument("query")
     g = sub.add_parser("get"); g.add_argument("id"); g.add_argument("--out", required=True, type=Path)
+    f = sub.add_parser("find"); f.add_argument("title"); f.add_argument("--artist"); f.add_argument("--version"); f.add_argument("--out", required=True, type=Path)
     a = p.parse_args()
     try:
-        {"login": lambda: login(a.qr), "status": status, "search": lambda: search(a.query), "get": lambda: get(a.id, a.out)}[a.cmd]()
+        {"login": lambda: login(a.qr), "status": status, "search": lambda: search(a.query), "get": lambda: get(a.id, a.out),
+         "find": lambda: find(a.title, a.artist, a.version, a.out)}[a.cmd]()
     except SystemExit:
         raise
     except Exception as e:  # noqa
