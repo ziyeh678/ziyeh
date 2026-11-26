@@ -26,6 +26,10 @@ python3 -I .claude/skills/open-social-link/scripts/tikhub.py "<用户发来的�
 
 用户发来音频/视频文件、或一份带时间点的歌单（"入场 1:02 开始""退场整首"之类），或说"剪一下这首歌"：直接用技能 `music-clip`，整理歌单 → 批量剪辑 → 把 zip 发给用户。规则（0.5 秒淡入、按原曲时间、编号命名、不覆盖）都写在 `.claude/skills/music-clip/SKILL.md`，照做不问。
 
+## 照片做成视频 / 让照片动起来
+
+用户发来照片说"让它动起来""做成视频""做个相册视频"：直接用技能 `photo-to-video`（本地 ffmpeg，免费），默认竖屏 9:16，做完把 mp4 发给用户。规则写在 `.claude/skills/photo-to-video/SKILL.md`，照做不问。
+
 ## 出错时自己处理，别问用户
 
 | 情况 | 你自己做 |
