@@ -1,0 +1,1 @@
+Local change: core/response.py snapshots CookieJar via get_dict() to preserve empty cookie values. Original source is L-1124/QQMusicApi 0.7.3. Modified for this workflow on 2026-09-24. Upstream LICENSE and README preserved.

@@ -10,10 +10,12 @@
   "event": "张三李四婚礼",
   "entries": [
     {"position": "新人入场", "title": "如果我们不曾相遇", "artist": "五月天",
-     "source": "/path/song.mp3 或 抖音/小红书链接", "start": "1:02", "end": "2:30",
-     "fade_in": null, "fade_out": null, "cancelled": false}
+     "source": "/path/song.mp3 或 抖音/小红书链接（不填就按歌名+歌手去网易云/QQ 下原唱）",
+     "version": null, "start": "1:02", "end": "2:30",
+     "fade_in": null, "fade_out": null, "instrumental": false, "cancelled": false}
   ]
 }
+instrumental：用户明确要求这首用伴奏时，填用户原话（字符串）或 true，会先去人声再剪。
 规则（来自婚礼音乐工作流）：
 - 时间都按原曲计；start 默认 0，end 默认到结尾。支持 62、1:02、1:02.5、1分2秒。
 - 实际裁剪的片段默认开头 0.5 秒淡入（最多片段长度一半）；整首不加；fade_in=0/false 关闭，给了秒数就用给的。
@@ -108,8 +110,53 @@ def safe(s):
     return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", str(s)).strip(" .")[:55] or "未命名"
 
 
+FETCH = HERE / "music_fetch.py"
+VOCAL = HERE / "vocal_remove.py"
+VOCAL_PY = Path.home() / ".cache" / "ziyeh-music" / "vocal" / "bin" / "python"
+
+
+def song_key(e):
+    """歌单条目的来源键：有 source 用 source，没有就用 song:歌名|歌手|版本 去网易云/QQ 找。"""
+    if e.get("source"):
+        return str(e["source"])
+    if not e.get("title"):
+        raise ValueError("条目既没有 source 也没有歌名")
+    return f"song:{e['title']}|{e.get('artist') or ''}|{e.get('version') or ''}"
+
+
+def instrumental(src, outdir, request):
+    if not VOCAL_PY.exists():
+        raise RuntimeError("去人声组件没装：按 vocal_remove.py 顶部说明安装")
+    r = subprocess.run([str(VOCAL_PY), str(VOCAL), str(src), "--out", str(outdir), "--request", request],
+                       capture_output=True, text=True, encoding="utf-8")
+    try:
+        data = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        raise RuntimeError("去人声失败：" + (r.stdout or r.stderr)[-500:])
+    if data.get("status") not in ("ok", "reused"):
+        raise RuntimeError("去人声失败：" + str(data.get("error")))
+    return Path(data["output"]), {"instrumental": True, "instrumental_model": data.get("model")}
+
+
 def fetch_source(src, workdir):
-    """本地文件直接用；抖音/小红书链接先下载视频（再从中取音轨）。"""
+    """本地文件直接用；抖音/小红书链接先下载视频（再从中取音轨）；song:歌名|歌手|版本 去网易云（优先）/QQ 下载原唱。"""
+    if str(src).startswith("song:"):
+        title, artist, version = (str(src)[5:].split("|") + ["", ""])[:3]
+        args = [sys.executable, "-I", str(FETCH), "get", title, "--out", str(workdir)]
+        if artist:
+            args += ["--artist", artist]
+        if version:
+            args += ["--version", version]
+        r = subprocess.run(args, capture_output=True, text=True, encoding="utf-8")
+        try:
+            data = json.loads(r.stdout)
+        except json.JSONDecodeError:
+            raise RuntimeError("找歌失败：" + (r.stdout or r.stderr)[-500:])
+        if data.get("status") != "ok":
+            raise RuntimeError(f"网易云/QQ 都没下到《{title}》" + (f"（{artist}）" if artist else "") + "，请上传这首歌的文件")
+        c = data.get("candidate") or data
+        return Path(data["path"]), {"song_platform": data.get("platform"), "song_title": c.get("title"),
+                                    "song_artists": c.get("artists"), "song_album": c.get("album")}
     if re.search(r"https?://", str(src)):
         out = subprocess.run([sys.executable, "-I", str(TIKHUB), str(src), "--download", str(workdir)],
                              capture_output=True, text=True, encoding="utf-8")
@@ -207,19 +254,33 @@ def cmd_batch(a):
                 row["status"] = "已取消，跳过"
                 continue
             n += 1
-            parts = [f"{n:03d}", e.get("position"), e.get("title"), e.get("artist")]
+            inst = e.get("instrumental")
+            parts = [f"{n:03d}", e.get("position"), e.get("title"), e.get("artist"), "伴奏" if inst else None]
             name = " - ".join(safe(p) for p in parts if p)
             target = str(out / (name + ".mp3"))
             old = prior.get(target)
+            try:
+                key = song_key(e)
+            except ValueError as ex:
+                row.update(status="失败", error=str(ex))
+                continue
             if old and Path(target).exists() and sha256(target) == old.get("sha256") \
-                    and old.get("start") == fmt(seconds(e.get("start")) or 0.0) and old.get("source_key") == str(e["source"]):
+                    and old.get("start") == fmt(seconds(e.get("start")) or 0.0) and old.get("source_key") == key:
                 row.update(old); row["reused"] = True
                 continue
             try:
-                key = str(e["source"])
                 if key not in cache:
-                    cache[key] = fetch_source(key, Path(w) / f"src{i}")
+                    # 按歌名下载的原曲留在「原曲」目录，原件不改动
+                    workdir = out / "原曲" if key.startswith("song:") else Path(w) / f"src{i}"
+                    cache[key] = fetch_source(key, workdir)
                 src, meta = cache[key]
+                if inst:
+                    ikey = key + "#伴奏"
+                    if ikey not in cache:
+                        req = inst if isinstance(inst, str) else "用户在歌单里要求这首用伴奏"
+                        cache[ikey] = instrumental(src, out / "伴奏", req)
+                    src, imeta = cache[ikey]
+                    meta = {**meta, **imeta}
                 r = clip(src, target, e.get("start"), e.get("end"), e.get("fade_in"), e.get("fade_out"))
                 row.update(r); row.update(meta); row["source_key"] = key; row["status"] = "成功"
             except Exception as ex:  # noqa
