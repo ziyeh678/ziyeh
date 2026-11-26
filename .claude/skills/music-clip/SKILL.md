@@ -1,6 +1,6 @@
 ---
 name: music-clip
-description: 音乐找歌 + 剪辑 + 去人声：用户只给歌名/歌手或一份歌单（文字/截图/Word），自动去网易云（优先）/QQ 音乐下载原唱完整版，按原曲时间裁剪、默认 0.5 秒淡入、编号命名、解码校验、打包 zip 发到手机；用户明确要求时去人声做伴奏。也接受上传的音频/视频或抖音小红书链接当来源。
+description: 音乐找歌 + 剪辑 + 去人声：用户只给歌名/歌手或一份歌单（文字/截图/Word），自动去网易云（优先）/QQ 音乐下载原唱完整版，按原曲时间裁剪、默认 0.5 秒淡入、编号命名、解码校验、逐首 mp3 发到手机；用户明确要求时去人声做伴奏。也接受上传的音频/视频或抖音小红书链接当来源。
 ---
 
 # 音乐：找歌 → 剪辑 → （可选）伴奏 → 发给用户
@@ -46,9 +46,9 @@ QQ 同理：`music_fetch.py login --qr <scratchpad>/qq-login.png`，「手机 QQ
 
 ## 3. 运行并发送
 ```bash
-python3 -I .claude/skills/music-clip/scripts/music_clip.py batch <歌单.json> --out <scratchpad>/music --zip
+python3 -I .claude/skills/music-clip/scripts/music_clip.py batch <歌单.json> --out <scratchpad>/music
 ```
-用 SendUserFile 发 zip（多首）或单个 mp3。回复一句：成功几首（各来自网易云/QQ/上传）、失败几首及原因。
+用 SendUserFile 把成品 mp3 **逐首单独**发（一次调用可传多个文件，`display: "render"`）。**不要发 zip**——用户手机上的 Claude App 打不开 zip，大文件也容易打不开。回复一句：成功几首（各来自网易云/QQ/上传）、失败几首及原因。
 单首也可以：`music_clip.py one "song:歌名|歌手" --start 1:02 --end 2:30 --out <目录>`
 
 ## 剪辑规则（来自婚礼音乐工作流，照做）

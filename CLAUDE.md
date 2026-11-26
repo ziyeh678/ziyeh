@@ -12,7 +12,7 @@ python3 -I .claude/skills/open-social-link/scripts/tikhub.py "<用户发来的�
 ```
 
 然后：
-1. 用 **SendUserFile**（`display: "render"`, `status: "normal"`）把 `files` 里的所有文件发给用户（视频或全部图片）。
+1. 用 **SendUserFile**（`display: "render"`, `status: "normal"`）把 `files` 里的所有文件发给用户（视频或全部图片）。**永远不要打包 zip**：用户手机打不开 zip 和太大的文件，一律逐个发原文件。
 2. 回复格式（就这么短）：
    ```
    ✅ 已下载：<标题或文案前 20 字>（作者 xxx，赞 x / 藏 x / 评 x）
@@ -24,7 +24,7 @@ python3 -I .claude/skills/open-social-link/scripts/tikhub.py "<用户发来的�
 
 ## 音乐剪辑（婚礼/活动歌单）
 
-用户发来**歌名**（"如果我们不曾相遇 五月天 从 1:02 开始"）、一份歌单（文字/截图/Word）、音频/视频文件，或说"剪一下这首歌""要伴奏"：直接用技能 `music-clip`——自动去网易云（优先）/QQ 音乐下原唱 → 按时间剪辑 → 用户要求时去人声 → 把 zip/mp3 发给用户。没登录就直接把二维码发给用户扫，不要先问。全部步骤和规则在 `.claude/skills/music-clip/SKILL.md`，照做不问。
+用户发来**歌名**（"如果我们不曾相遇 五月天 从 1:02 开始"）、一份歌单（文字/截图/Word）、音频/视频文件，或说"剪一下这首歌""要伴奏"：直接用技能 `music-clip`——自动去网易云（优先）/QQ 音乐下原唱 → 按时间剪辑 → 用户要求时去人声 → 把 mp3 **逐首单独**发给用户（手机打不开 zip，不要发 zip）。没登录就直接把二维码发给用户扫，不要先问。全部步骤和规则在 `.claude/skills/music-clip/SKILL.md`，照做不问。
 
 ## 出错时自己处理，别问用户
 
