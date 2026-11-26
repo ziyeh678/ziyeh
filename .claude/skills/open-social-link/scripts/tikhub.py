@@ -20,12 +20,18 @@ UA = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.1
 def api(path, **params):
     url = f"{BASE}{path}?{urllib.parse.urlencode(params)}"
     req = urllib.request.Request(url, headers={"Authorization": f"Bearer {KEY}", "User-Agent": "tikhub-skill/1.0"})
-    try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            return json.load(r)
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", "replace")[:500]
-        raise SystemExit(json.dumps({"error": f"TikHub HTTP {e.code}", "detail": body}, ensure_ascii=False))
+    import time
+    for attempt in range(3):
+        try:
+            with urllib.request.urlopen(req, timeout=60) as r:
+                return json.load(r)
+        except urllib.error.HTTPError as e:
+            body = e.read().decode("utf-8", "replace")[:500]
+            # 400/5xx 多为 TikHub 上游临时失败（不扣费），重试；401/402/403/429 直接报错
+            if e.code in (400, 500, 502, 503, 504) and attempt < 2:
+                time.sleep(2 * (attempt + 1))
+                continue
+            raise SystemExit(json.dumps({"error": f"TikHub HTTP {e.code}", "detail": body}, ensure_ascii=False))
 
 
 def first(lst):
@@ -41,6 +47,11 @@ def douyin(text):
     if br:
         best = max(br, key=lambda b: b.get("bit_rate") or 0)
         play = first((best.get("play_addr") or {}).get("url_list")) or play
+    cands = []
+    for b in sorted(br, key=lambda b: -(b.get("bit_rate") or 0)):
+        cands += (b.get("play_addr") or {}).get("url_list") or []
+    cands += (v.get("play_addr") or {}).get("url_list") or []
+    cands += (v.get("download_addr") or {}).get("url_list") or []
     st = a.get("statistics") or {}
     return d, {
         "platform": "douyin",
@@ -54,6 +65,7 @@ def douyin(text):
         "cover": first((v.get("cover") or {}).get("url_list")),
         "images": [first(i.get("url_list")) for i in (a.get("images") or [])],
         "video_url": None if a.get("images") else play,
+        "video_backup_urls": [] if a.get("images") else [u for u in dict.fromkeys(cands) if u != play],
         "music": (a.get("music") or {}).get("title"),
     }
 
@@ -94,11 +106,23 @@ def find_video_url(obj):
 
 
 def xiaohongshu(text):
-    d = api("/api/v1/xiaohongshu/app_v2/get_video_note_detail", share_text=text)
+    m = re.search(r"(?:explore|item|discovery/item|note)/([0-9a-f]{24})", text)
+    q = {"note_id": m.group(1)} if m else {"share_text": re.search(r"https?://\S+", text).group(0)}
+    want = q.get("note_id")
+
+    def nid(n):
+        return n.get("id") or n.get("note_id") or n.get("noteId")
+
+    def ok(n):
+        return n and (not want or nid(n) == want)
+
+    d = api("/api/v1/xiaohongshu/app_v2/get_video_note_detail", **q)
     n = find_note(d)
-    if not n or not (n.get("video") or find_video_url(n)):
-        d = api("/api/v1/xiaohongshu/app_v2/get_image_note_detail", share_text=text)
-        n = find_note(d) or {}
+    if not ok(n) or not (n.get("video") or find_video_url(n)):
+        d = api("/api/v1/xiaohongshu/app_v2/get_image_note_detail", **q)
+        n = find_note(d)
+    if not ok(n):
+        sys.exit(json.dumps({"error": f"TikHub 没返回请求的笔记 {want}（返回了 {nid(n or {})}）", "hint": "可改用 fetch_social.py"}, ensure_ascii=False))
     imgs = []
     for i in n.get("images_list") or n.get("image_list") or n.get("imageList") or []:
         imgs.append(i.get("original") or i.get("url_size_large") or i.get("url") or i.get("urlDefault"))
@@ -120,15 +144,30 @@ def xiaohongshu(text):
 def download(out, folder):
     os.makedirs(folder, exist_ok=True)
     base = f"{out['platform']}_{out.get('id')}"
-    targets = [(out["video_url"], ".mp4")] if out.get("video_url") else [(u, ".jpg") for u in out.get("images") or []]
+    if out.get("video_url"):
+        targets = [([out["video_url"]] + (out.get("video_backup_urls") or []), ".mp4")]
+    else:
+        targets = [([u], ".jpg") for u in out.get("images") or []]
     files = []
-    for i, (u, ext) in enumerate(targets):
+    for i, (urls, ext) in enumerate(targets):
         path = os.path.join(folder, base + (f"_{i}" if len(targets) > 1 else "") + ext)
-        req = urllib.request.Request(u, headers={"User-Agent": UA})
-        with urllib.request.urlopen(req, timeout=180) as r, open(path, "wb") as f:
-            while chunk := r.read(1 << 16):
-                f.write(chunk)
-        files.append({"path": os.path.abspath(path), "bytes": os.path.getsize(path)})
+        last = None
+        for u in urls:  # CDN 主机每次可能不同，逐个尝试备用地址
+            if u.startswith("http://"):
+                u = "https://" + u[len("http://"):]
+            try:
+                req = urllib.request.Request(u, headers={"User-Agent": UA})
+                with urllib.request.urlopen(req, timeout=180) as r, open(path, "wb") as f:
+                    while chunk := r.read(1 << 16):
+                        f.write(chunk)
+                if os.path.getsize(path) > 0:
+                    files.append({"path": os.path.abspath(path), "bytes": os.path.getsize(path)})
+                    last = None
+                    break
+            except Exception as e:  # noqa
+                last = e
+        if last:
+            raise last
     return files
 
 
@@ -147,7 +186,22 @@ def main():
     if re.search(r"douyin\.com|iesdouyin", text):
         d, out = douyin(text)
     elif re.search(r"xhslink\.com|xiaohongshu\.com|rednote\.com", text):
-        d, out = xiaohongshu(text)
+        # 小红书先走免费网页解析（能拿到完整视频流），失败再用 TikHub
+        out = None
+        try:
+            import importlib.util
+            spec = importlib.util.spec_from_file_location("fetch_social", os.path.join(os.path.dirname(os.path.abspath(__file__)), "fetch_social.py"))
+            fs = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(fs)
+            out = fs.xiaohongshu(fs.extract_url(text))
+            d = None
+        except Exception:  # noqa
+            out = None
+        if not out or out.get("error"):
+            d, out = xiaohongshu(text)
+            out["source"] = "tikhub"
+        else:
+            out["source"] = "web"
     else:
         sys.exit(json.dumps({"error": "不是抖音/小红书链接"}, ensure_ascii=False))
     if folder:

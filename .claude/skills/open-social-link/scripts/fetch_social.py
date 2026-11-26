@@ -95,13 +95,15 @@ def xiaohongshu(url):
     imgs = []
     for i in note.get("imageList") or []:
         imgs.append(i.get("urlDefault") or i.get("url") or ((i.get("infoList") or [{}])[-1]).get("url"))
-    vurl = None
+    vurl, backups = None, []
     try:
         streams = note["video"]["media"]["stream"]
-        for k in ("h264", "h265", "av1"):
-            if streams.get(k):
-                vurl = streams[k][0].get("masterUrl")
-                break
+        for k in ("h264", "h265", "av1"):  # h264 兼容性最好，排前面
+            for st in streams.get(k) or []:
+                for u in [st.get("masterUrl")] + (st.get("backupUrls") or []):
+                    if u:
+                        backups.append(u)
+        vurl = backups.pop(0) if backups else None
     except (KeyError, TypeError, IndexError):
         pass
     nid = note.get("noteId") or (re.search(r"/([0-9a-f]{24})", final) or [None, None])[1]
@@ -119,6 +121,7 @@ def xiaohongshu(url):
         "tags": [t.get("name") for t in note.get("tagList") or []],
         "images": [u for u in imgs if u],
         "video_url": vurl,
+        "video_backup_urls": backups,
     }
 
 
