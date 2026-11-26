@@ -185,7 +185,7 @@ def main():
     text = " ".join(args)
     if re.search(r"douyin\.com|iesdouyin", text):
         d, out = douyin(text)
-    elif re.search(r"xhslink\.com|xiaohongshu\.com|rednote\.com", text):
+    elif re.search(r"xhslink\.(?:com|cn)|xiaohongshu\.com|rednote\.com", text):
         # 小红书先走免费网页解析（能拿到完整视频流），失败再用 TikHub
         out = None
         try:
