@@ -84,6 +84,27 @@ def main():
     liunian = [{"年": ny, "干支": Solar.fromYmd(ny, 6, 1).getLunar().getYearInGanZhiExact()}
                for ny in range(now_year, now_year + 3)]
 
+    sys.path.insert(0, HERE)
+    import analysis as an
+    gans = [p["干支"][0] for p in pillars.values()]
+    zhis = [p["干支"][1] for p in pillars.values()]
+    hides = [p["藏干"] for p in pillars.values()]
+    labels = ["年", "月", "日", "时"][: len(gans)]
+    cur = next((x for x in dayun if x.get("当前")), None)
+    this_year = liunian[0]["干支"]
+    yun_g, yun_z, yun_l = list(gans), list(zhis), list(labels)
+    if cur:
+        yun_g.append(cur["干支"][0]); yun_z.append(cur["干支"][1]); yun_l.append("大运")
+    yun_g.append(this_year[0]); yun_z.append(this_year[1]); yun_l.append("流年")
+    natal_rel = an.relations(labels, gans, zhis)
+    fenxi = {
+        "旺衰": an.strength(gans, zhis, hides, ec.getDayGan(), 1),
+        **an.tiaohou(ec.getDayGan(), ec.getMonthZhi()),
+        "原局刑冲合害": natal_rel,
+        "今年(大运+流年)引动": [r for r in an.relations(yun_l, yun_g, yun_z) if r not in natal_rel],
+        "神煞": an.shensha(gans, zhis),
+    }
+
     out = {
         "输入": {"阳历": solar.toYmdHms(), "农历": lunar.toString(), "性别": a.gender, "备注": note},
         "八字": {
@@ -95,6 +116,7 @@ def main():
             "起运": f"出生后{yun.getStartYear()}年{yun.getStartMonth()}个月{yun.getStartDay()}天起运",
             "大运": dayun, "流年": liunian,
         },
+        "程序分析": fenxi,
     }
     if use_ziwei:
         hour_idx = 0 if t.hour == 0 else (12 if t.hour == 23 else (t.hour + 1) // 2)
