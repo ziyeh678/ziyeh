@@ -1,23 +1,44 @@
-# 项目说明（给新会话的 Claude）
+# 必读：用户发链接 = 直接下载并发给他
 
-用户主要在**手机**上用 Claude App 发小红书 / 抖音链接，让你打开、总结、下载无水印视频/图片。用中文回复，简洁。
+用户在**手机**上用。他的沟通成本要降到最低：**不要提问、不要确认、不要解释方案、不要列选项**。看到链接就直接干活，干完用中文一两句话回报。
 
-## 怎么做
-- 打开 / 下载链接：用技能 `open-social-link`（脚本 `.claude/skills/open-social-link/scripts/tikhub.py`）。
-- 下载好的文件用 SendUserFile 发给用户，他在手机上保存到相册。
-- 搬运：技能 `repost-video`。云端只负责下载 + 改写文案；发布由用户在 App 里自己发（云端登录账号易被封）。只搬运用户自己的或已授权的内容。
+## 默认动作（用户只发了链接或分享文字时）
 
-## 环境
-- 会话应使用云环境 **ziyeh**：已放行小红书/抖音域名和部分视频 CDN；api.tikhub.io 的 API Key 存在环境网络密钥里，由代理自动注入（脚本里 `TIKHUB_API_KEY` 用占位值即可，不要找用户要密钥）。
-- 如果用户在别的环境里，提醒他新建会话时选 ziyeh 环境。
-- 视频 CDN 主机名会变，下载被拦（`no rule ... allows this host`）时，用 update_environment 把具体主机名加进 ziyeh 的放行列表再重试；同时可先把 `video_url` 发给用户在浏览器打开。
+用户发来任何包含小红书 / 抖音链接的消息（`xhslink.com`、`xiaohongshu.com`、`rednote.com`、`v.douyin.com`、`douyin.com`，或整段"复制打开…"分享文字），**立刻**执行：
 
-## 费用（TikHub，按次扣用户余额）
-- 抖音解析 0.001 美元/次；小红书 TikHub 通道 0.01 美元/次（小红书默认走免费网页解析，失败才用）；400 失败不扣费。
-- 查余额：`curl -s -H "Authorization: Bearer proxy-injected" https://api.tikhub.io/api/v1/tikhub/user/get_user_info`
-- 批量操作前先告诉用户大概花费。
+```bash
+D=<你的 scratchpad 目录>/dl
+python3 -I .claude/skills/open-social-link/scripts/tikhub.py "<用户发来的整段原文>" --download "$D"
+```
 
-## 已知情况
-- 抖音不给海外 IP 返回网页数据，只能走 TikHub。
-- 小红书 `video_url` 优先是无水印原始文件（sns-video-bd.xhscdn.com），备用流带水印。
-- TikHub 小红书 app_v2 接口偶尔返回错的笔记，脚本已校验 note_id。
+然后：
+1. 用 **SendUserFile**（`display: "render"`, `status: "normal"`）把 `files` 里的所有文件发给用户（视频或全部图片）。
+2. 回复格式（就这么短）：
+   ```
+   ✅ 已下载：<标题或文案前 20 字>（作者 xxx，赞 x / 藏 x / 评 x）
+   ```
+   - 小红书如果最后用的是带水印的备用流，加一句"⚠️ 原片下载失败，这份带水印"。
+3. 一条消息里有多个链接：逐个处理，每个下载完就发。
+
+用户如果说了别的要求（总结、写文案、只看不下载等），按他说的做，但同样**不要反问**，按最合理的理解直接做。
+
+## 出错时自己处理，别问用户
+
+| 情况 | 你自己做 |
+|---|---|
+| `download_error` 含 `no rule or network setting allows this host` | 从 `video_url` / `video_backup_urls` 里找到被拦的主机名，用 update_environment 加进 **ziyeh** 环境的放行列表（只加具体主机名），等 30 秒重试。仍失败就把 `video_url` 发给用户："点开链接长按保存"。 |
+| TikHub `HTTP 400` | 脚本已自动重试 3 次；仍失败就再跑一次脚本。 |
+| TikHub `HTTP 401` | 密钥失效。告诉用户一句："TikHub 密钥失效了，回我'换密钥'"，然后用 request_credential（host `api.tikhub.io`）弹框。 |
+| TikHub `HTTP 402` / 余额不足 | 告诉用户一句："TikHub 余额不足，去 user.tikhub.io 充值"。小红书链接改用 `fetch_social.py`（同目录，参数相同，免费）继续。 |
+| 小红书"没拿到笔记内容" | 让用户在 App 里"分享 → 复制链接"重新发（缺 xsec_token）。只说这一句。 |
+| 小红书 / 抖音主域名报 `CONNECT tunnel failed, response 403` | 当前会话不在 ziyeh 环境。告诉用户一句："请新建会话时环境选 ziyeh"。 |
+
+## 背景（需要时再看）
+
+- **环境**：云环境 `ziyeh` 已放行小红书 / 抖音域名和部分视频 CDN；`api.tikhub.io` 的 API Key 存在环境网络密钥里，代理自动注入，**不要找用户要密钥**，脚本里也不用设变量。
+- **抖音**：只能走 TikHub（抖音不给海外 IP 返回网页数据），返回无水印地址。
+- **小红书**：脚本先走免费网页解析，`video_url` 优先是无水印原始文件 `sns-video-bd.xhscdn.com/<originVideoKey>`（原画质，可能是 4K），失败才用 TikHub。
+- **费用**（扣用户 TikHub 余额）：抖音 0.001 美元/次，小红书 TikHub 通道 0.01 美元/次，400 不扣费。一次超过 20 个链接时先说一句大概花费再做。
+  查余额：`curl -s -H "Authorization: Bearer proxy-injected" https://api.tikhub.io/api/v1/tikhub/user/get_user_info`
+- **搬运**（用户说"搬运 / 发到小红书 / 发到抖音"）：下载 + 按目标平台改写标题（小红书 ≤20 字）、正文、话题标签，一次性给出可直接复制的文案；发布由用户在 App 里自己发（云端登录账号易封号）。只搬运用户自己的或已授权的内容，不确定时在文案后附一句提醒，不要反问。
+- 技能细节：`.claude/skills/open-social-link/SKILL.md`、`.claude/skills/repost-video/SKILL.md`。
