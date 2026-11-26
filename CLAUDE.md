@@ -26,6 +26,14 @@ python3 -I .claude/skills/open-social-link/scripts/tikhub.py "<用户发来的�
 
 用户发来音频/视频文件、或一份带时间点的歌单（"入场 1:02 开始""退场整首"之类），或说"剪一下这首歌"：直接用技能 `music-clip`，整理歌单 → 批量剪辑 → 把 zip 发给用户。规则（0.5 秒淡入、按原曲时间、编号命名、不覆盖）都写在 `.claude/skills/music-clip/SKILL.md`，照做不问。
 
+## 视频剪辑（用户发视频说"剪一下 / 加字幕 / 去掉废话 / 做成竖屏"等）
+
+- **首选 `ffmpeg-skill`**（`.claude/skills/ffmpeg-skill`，本地、免费）：剪切、拼接、去静音、去"嗯啊"口癖、中文字幕（`caption.py --transcribe --language zh --engine faster-whisper`）、9:16 竖屏、抖音/小红书导出（`render.py --template tiktok` 等）。脚本用 `python3 scripts/xxx.py` 跑（**不要加 `-I`**，否则找不到 `_common`）。
+- **`video-use`**：对话式口播精剪，但转写要 ElevenLabs 密钥（`api.elevenlabs.io`）；没有密钥就用 ffmpeg-skill + faster-whisper 代替。它要求"先确认方案"——按本文件规则，直接按最合理方案剪，不反问。
+- **`remotion-*`**：片头、动效字幕、图文动画（需 npm；渲染浏览器用 `/opt/pw-browsers/chromium`）。
+- 剪完用 SendUserFile 发给用户，一两句话回报。
+- faster-whisper 由环境启动脚本自动安装；模型从 huggingface 下载（已放行）。
+
 ## 出错时自己处理，别问用户
 
 | 情况 | 你自己做 |
